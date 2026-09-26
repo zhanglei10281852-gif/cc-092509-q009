@@ -17,6 +17,8 @@ from app.archives.schemas import (
     LocationCreate,
     DossierCreate,
 )
+from app.archives.disclosure_schemas import ContentItemCreate, ContentItemUpdate, SecurityProfileUpsert
+from app.archives.disclosure_package import DossierContentService
 from app.archives.service import IncidentService, ApprovalService, AccessLoanService, VaultService, DossierLifecycleService
 
 router = APIRouter(prefix="/api/dossiers", tags=["知识产权档案"])
@@ -69,6 +71,34 @@ def issue_copy(dossier_id: int, payload: CopyIssueRequest, principal: Principal 
 def disclose(dossier_id: int, payload: DisclosureUseCreate, principal: Principal = Depends(current_principal)):
     with transaction(immediate=True) as connection:
         return DossierLifecycleService(connection).disclose(principal, dossier_id, payload.model_dump())
+
+
+@router.put("/{dossier_id}/security-profile")
+def upsert_security_profile(dossier_id: int, payload: SecurityProfileUpsert, principal: Principal = Depends(current_principal)):
+    with transaction(immediate=True) as connection:
+        return DossierContentService(connection).upsert_security_profile(principal, dossier_id, payload.model_dump())
+
+
+@router.post("/{dossier_id}/content-items", status_code=status.HTTP_201_CREATED)
+def add_content_item(dossier_id: int, payload: ContentItemCreate, principal: Principal = Depends(current_principal)):
+    with transaction(immediate=True) as connection:
+        return DossierContentService(connection).add_content_item(principal, dossier_id, payload.model_dump())
+
+
+@router.get("/{dossier_id}/content-items")
+def list_content_items(dossier_id: int, principal: Principal = Depends(current_principal)):
+    return DossierContentService(get_connection()).list_content_items(principal, dossier_id)
+
+
+@router.patch("/{dossier_id}/content-items/{item_id}")
+def update_content_item(
+    dossier_id: int,
+    item_id: int,
+    payload: ContentItemUpdate,
+    principal: Principal = Depends(current_principal),
+):
+    with transaction(immediate=True) as connection:
+        return DossierContentService(connection).update_content_item(principal, dossier_id, item_id, payload.model_dump(exclude_unset=True))
 
 
 @router.post("/access_loans", status_code=status.HTTP_201_CREATED)

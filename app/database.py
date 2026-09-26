@@ -335,6 +335,98 @@ CREATE TABLE IF NOT EXISTS dossier_events (
     occurred_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_dossier_events_dossier ON dossier_events(dossier_id, id);
+
+CREATE TABLE IF NOT EXISTS dossier_security_profiles (
+    dossier_id INTEGER PRIMARY KEY REFERENCES dossiers(id) ON DELETE CASCADE,
+    secrecy_level TEXT NOT NULL CHECK(secrecy_level IN ('internal','confidential','restricted','top_secret')),
+    updated_by INTEGER REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dossier_content_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE CASCADE,
+    item_kind TEXT NOT NULL CHECK(item_kind IN ('page_range','attachment','field')),
+    label TEXT NOT NULL,
+    confidential_until TEXT,
+    ownership_confirmed INTEGER NOT NULL DEFAULT 1 CHECK(ownership_confirmed IN (0,1)),
+    export_restricted INTEGER NOT NULL DEFAULT 0 CHECK(export_restricted IN (0,1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(dossier_id, item_kind, label)
+);
+CREATE INDEX IF NOT EXISTS idx_content_items_dossier ON dossier_content_items(dossier_id);
+
+CREATE TABLE IF NOT EXISTS disclosure_packages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    package_code TEXT NOT NULL UNIQUE,
+    recipient_code TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('in_review','signing','signed','stale','dispatched','cancelled')),
+    manifest_digest TEXT NOT NULL,
+    required_signatures INTEGER NOT NULL DEFAULT 2 CHECK(required_signatures >= 2),
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS disclosure_package_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    package_id INTEGER NOT NULL REFERENCES disclosure_packages(id) ON DELETE CASCADE,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id),
+    dossier_version INTEGER NOT NULL,
+    secrecy_level TEXT NOT NULL,
+    item_kind TEXT NOT NULL CHECK(item_kind IN ('page_range','attachment','field')),
+    label TEXT NOT NULL,
+    confidential_until TEXT,
+    ownership_confirmed INTEGER NOT NULL CHECK(ownership_confirmed IN (0,1)),
+    export_restricted INTEGER NOT NULL CHECK(export_restricted IN (0,1)),
+    auto_excluded INTEGER NOT NULL DEFAULT 0 CHECK(auto_excluded IN (0,1)),
+    auto_reason TEXT NOT NULL DEFAULT '',
+    decision TEXT NOT NULL DEFAULT 'pending' CHECK(decision IN ('pending','kept','excluded')),
+    rationale TEXT NOT NULL DEFAULT '',
+    decided_by INTEGER REFERENCES users(id),
+    decided_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(package_id, dossier_id, item_kind, label)
+);
+CREATE INDEX IF NOT EXISTS idx_package_items_package ON disclosure_package_items(package_id);
+
+CREATE TABLE IF NOT EXISTS disclosure_package_signatures (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    package_id INTEGER NOT NULL REFERENCES disclosure_packages(id) ON DELETE CASCADE,
+    signer_user_id INTEGER NOT NULL REFERENCES users(id),
+    signer_role TEXT NOT NULL CHECK(signer_role IN ('legal','security')),
+    manifest_digest TEXT NOT NULL,
+    signed_at TEXT NOT NULL,
+    UNIQUE(package_id, signer_role),
+    UNIQUE(package_id, signer_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS disclosure_package_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    package_id INTEGER NOT NULL REFERENCES disclosure_packages(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    actor_user_id INTEGER REFERENCES users(id),
+    details_json TEXT NOT NULL DEFAULT '{}',
+    occurred_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_package_events_package ON disclosure_package_events(package_id, id);
+
+CREATE TABLE IF NOT EXISTS disclosure_dispatches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    package_id INTEGER NOT NULL UNIQUE REFERENCES disclosure_packages(id),
+    idempotency_key TEXT NOT NULL UNIQUE,
+    recipient_code TEXT NOT NULL,
+    manifest_digest TEXT NOT NULL,
+    dispatched_by INTEGER NOT NULL REFERENCES users(id),
+    note TEXT NOT NULL DEFAULT '',
+    dispatched_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 PERMISSIONS = [
@@ -353,6 +445,11 @@ PERMISSIONS = [
     ("approvals.decide", "审批高风险操作", "approvals", "decide"),
     ("vaults.read_sensitive", "查看精确密级库位", "vaults", "read_sensitive"),
     ("incidents.manage", "管理泄密事件", "incidents", "manage"),
+    ("disclosure_packages.read", "查看披露包", "disclosure_packages", "read"),
+    ("disclosure_packages.write", "编排与审查披露包", "disclosure_packages", "write"),
+    ("disclosure_packages.sign_legal", "法务签字披露包", "disclosure_packages", "sign_legal"),
+    ("disclosure_packages.sign_security", "保密签字披露包", "disclosure_packages", "sign_security"),
+    ("disclosure_packages.dispatch", "登记披露包发送", "disclosure_packages", "dispatch"),
 ]
 
 
@@ -417,6 +514,8 @@ def init_db() -> None:
             ("researcher", "研究人员", "查看档案并申请查阅借阅或登记对外合作披露使用"),
             ("approver", "风险审批人", "复核合规处置、位置解密与载体盘点调整"),
             ("auditor", "审计查看员", "只读查看档案事件和审计记录"),
+            ("legal_counsel", "法务审查员", "审查披露包并进行法务签字"),
+            ("security_officer", "保密审查员", "审查披露包并进行保密签字"),
         )
         for code, name, description in roles:
             connection.execute(
@@ -432,10 +531,13 @@ def init_db() -> None:
             "dossier_manager": [
                 "dossiers.read", "dossiers.write", "dossiers.disclose", "dossiers.dispose",
                 "access_loans.manage", "inventory_review.manage", "incidents.manage",
+                "disclosure_packages.read", "disclosure_packages.write", "disclosure_packages.dispatch",
             ],
             "researcher": ["dossiers.read", "dossiers.disclose"],
             "approver": ["dossiers.read", "approvals.decide"],
-            "auditor": ["dossiers.read", "audit.read"],
+            "auditor": ["dossiers.read", "audit.read", "disclosure_packages.read"],
+            "legal_counsel": ["disclosure_packages.read", "disclosure_packages.sign_legal"],
+            "security_officer": ["disclosure_packages.read", "disclosure_packages.sign_security"],
         }
         for role_code, permission_codes in role_permissions.items():
             role_id = connection.execute("SELECT id FROM roles WHERE code=?", (role_code,)).fetchone()[0]
