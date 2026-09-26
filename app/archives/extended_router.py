@@ -12,11 +12,25 @@ from app.archives.extended_schemas import (
     InventoryReviewStart,
     TransferCreate,
 )
+from app.archives.disclosure_schemas import MaterialUpdate, SecrecyUpdate
+from app.archives.disclosure_packages import MaterialService
 from app.archives.inventory_review import InventoryReviewService, ArchiveSummaryService
 from app.archives.operations import DisclosureService, DisposalService, ProvenanceService, TransferService
 from app.archives.reporting import BatchReconciliationService, ExceptionAgingService
 
 router = APIRouter(prefix="/api/dossier-operations", tags=["档案作业"])
+
+
+@router.patch("/materials/{material_id}")
+def update_material(material_id: int, payload: MaterialUpdate, principal: Principal = Depends(current_principal)):
+    with transaction(immediate=True) as connection:
+        return MaterialService(connection).update(principal, material_id, payload.model_dump(exclude_unset=True))
+
+
+@router.patch("/{dossier_id}/secrecy")
+def update_secrecy(dossier_id: int, payload: SecrecyUpdate, principal: Principal = Depends(current_principal)):
+    with transaction(immediate=True) as connection:
+        return MaterialService(connection).update_secrecy(principal, dossier_id, payload.model_dump())
 
 
 @router.post("/disclosures", status_code=status.HTTP_201_CREATED)

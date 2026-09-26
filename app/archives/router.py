@@ -17,6 +17,8 @@ from app.archives.schemas import (
     LocationCreate,
     DossierCreate,
 )
+from app.archives.disclosure_schemas import MaterialCreate
+from app.archives.disclosure_packages import MaterialService
 from app.archives.service import IncidentService, ApprovalService, AccessLoanService, VaultService, DossierLifecycleService
 
 router = APIRouter(prefix="/api/dossiers", tags=["知识产权档案"])
@@ -57,6 +59,17 @@ def list_dossiers(
 @router.get("/{dossier_id}")
 def get_dossier(dossier_id: int, principal: Principal = Depends(current_principal)):
     return DossierLifecycleService(get_connection()).detail(principal, dossier_id)
+
+
+@router.post("/{dossier_id}/materials", status_code=status.HTTP_201_CREATED)
+def register_material(dossier_id: int, payload: MaterialCreate, principal: Principal = Depends(current_principal)):
+    with transaction(immediate=True) as connection:
+        return MaterialService(connection).register(principal, dossier_id, payload.model_dump())
+
+
+@router.get("/{dossier_id}/materials")
+def list_materials(dossier_id: int, principal: Principal = Depends(current_principal)):
+    return MaterialService(get_connection()).list_for_dossier(principal, dossier_id)
 
 
 @router.post("/{dossier_id}/issue_copys", status_code=status.HTTP_201_CREATED)
